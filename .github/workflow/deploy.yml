@@ -1,7 +1,52 @@
-FROM nginx:alpine
+name: CI/CD — Deploy TramaSul para EC2
 
-# Remove a página padrão do nginx e copia os arquivos do case
-RUN rm -rf /usr/share/nginx/html/*
-COPY case1_tramasul/ /usr/share/nginx/html/
+on:
+  push:
+    branches: [ main ]
 
-EXPOSE 80
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Copiar arquivos para EC2 via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "case1_tramasul/,Dockerfile"
+          target: ~/app
+
+      - name: Build e deploy do container Docker
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd ~/app
+
+            # Derrubar container antigo sem erro se não existir
+            docker stop tramasul 2>/dev/null || true
+            docker rm   tramasul 2>/dev/null || true
+
+            # Build da nova imagem
+            docker build -t tramasul:latest .
+
+            # Subir novo container na porta 80 pública
+            docker run -d \
+              --name tramasul \
+              --restart always \
+              -p 80:80 \
+              tramasul:latest
+
+            # Remover imagens antigas não utilizadas
+            docker image prune -f
+
+            echo "Deploy OK — $(docker ps --filter name=tramasul --format 'status: {{.Status}}')"
